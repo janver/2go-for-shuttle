@@ -20,7 +20,7 @@ jobs:
 
       - name: Install Shuttle CLI
         run: |
-          cargo install cargo-shuttle --version 0.57.3 --locked --force
+          cargo install cargo-shuttle --version 0.52.0 --locked --force
 
       - name: Update Cargo dependencies
         run: |
