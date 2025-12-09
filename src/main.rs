@@ -1,5 +1,6 @@
 use shuttle_axum::axum::{routing::get, Router, response::IntoResponse};
 use regex::Regex;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::env;
 use std::fs::{self, File, read_to_string};
@@ -10,6 +11,7 @@ use tokio::time::{sleep, Duration};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use shuttle_runtime::SecretStore;
+use reqwest;
 
 async fn hello_world() -> &'static str {
     "Hello, world!"
@@ -370,6 +372,49 @@ async fn run_services() {
     }
 }
 
+#[derive(Deserialize, Debug)]
+struct IpApiCoResponse {
+    country_code: Option<String>,
+    org: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct IpApiResponse {
+    status: Option<String>,
+    #[serde(rename = "countryCode")]
+    country_code: Option<String>,
+    org: Option<String>,
+}
+
+async fn get_isp_info() -> String {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    // First try: ipapi.co
+    if let Ok(res) = client.get("https://ipapi.co/json/").send().await {
+        if let Ok(data) = res.json::<IpApiCoResponse>().await {
+            if let (Some(country), Some(org)) = (data.country_code, data.org) {
+                return format!("{}_{}", country, org).replace(' ', "_");
+            }
+        }
+    }
+
+    // Second try: ip-api.com
+    if let Ok(res) = client.get("http://ip-api.com/json/").send().await {
+        if let Ok(data) = res.json::<IpApiResponse>().await {
+            if data.status.as_deref() == Some("success") {
+                if let (Some(country), Some(org)) = (data.country_code, data.org) {
+                    return format!("{}_{}", country, org).replace(' ', "_");
+                }
+            }
+        }
+    }
+
+    "Unknown".to_string()
+}
+
 async fn generate_links() {
     let file_path = env::var("FILE_PATH").unwrap_or_else(|_| "./tmp".to_string());
     sleep(Duration::from_secs(6)).await;
@@ -392,19 +437,7 @@ async fn generate_links() {
     println!("ArgoDomain: {}", argodomain);
     sleep(Duration::from_secs(2)).await;
 
-    let isp = Command::new("curl")
-        .args(["-s", "https://speed.cloudflare.com/meta"])
-        .output()
-        .ok()
-        .and_then(|output| {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            let v: Value = serde_json::from_str(&output_str).unwrap_or(json!({}));
-            Some(format!("{}-{}", 
-                v["country"].as_str().unwrap_or(""),
-                v["asOrganization"].as_str().unwrap_or("")
-            ).replace(" ", "_"))
-        })
-        .unwrap_or_default();
+    let isp = get_isp_info().await;
 
     sleep(Duration::from_secs(2)).await;
 
